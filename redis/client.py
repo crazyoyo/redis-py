@@ -716,6 +716,7 @@ class PubSub:
         self.shard_hint = shard_hint
         self.ignore_subscribe_messages = ignore_subscribe_messages
         self.connection = None
+        self.connections = set()
         self.subscribed_event = threading.Event()
         # we need to know the encoding options for this connection in order
         # to lookup channel and pattern names for callback handlers.
@@ -858,6 +859,7 @@ class PubSub:
         called by the # connection to resubscribe us to any channels and
         patterns we were previously listening to
         """
+
         return conn.retry.call_with_retry(
             lambda: command(*args, **kwargs),
             lambda error: self._disconnect_raise_connect(conn, error),
@@ -865,30 +867,35 @@ class PubSub:
 
     def parse_response(self, block=True, timeout=0):
         """Parse the response from a publish/subscribe command"""
-        conn = self.connection
-        if conn is None:
-            raise RuntimeError(
-                "pubsub connection not set: "
-                "did you forget to call subscribe() or psubscribe()?"
-            )
+        # conn = self.connection
+        resps = []
+        for conn in self.connections:
+            if conn is None:
+                raise RuntimeError(
+                    "pubsub connection not set: "
+                    "did you forget to call subscribe() or psubscribe()?"
+                )
 
-        self.check_health()
+            self.check_health()
 
-        def try_read():
-            if not block:
-                if not conn.can_read(timeout=timeout):
-                    return None
-            else:
-                conn.connect()
-            return conn.read_response(disconnect_on_error=False, push_request=True)
+            def try_read():
+                if not block:
+                    if not conn.can_read(timeout=timeout):
+                        return None
+                else:
+                    conn.connect()
+                return conn.read_response(disconnect_on_error=False, push_request=True)
 
-        response = self._execute(conn, try_read)
+            response = self._execute(conn, try_read)
 
-        if self.is_health_check_response(response):
-            # ignore the health check message as user might not expect it
-            self.health_check_response_counter -= 1
-            return None
-        return response
+            if self.is_health_check_response(response):
+                # ignore the health check message as user might not expect it
+                self.health_check_response_counter -= 1
+                response = None
+            if response:
+                resps.append(response)
+
+        return resps
 
     def is_health_check_response(self, response) -> bool:
         """
@@ -931,22 +938,35 @@ class PubSub:
         received on that pattern rather than producing a message via
         ``listen()``.
         """
+
         if args:
             args = list_or_args(args[0], args[1:])
         new_patterns = dict.fromkeys(args)
         new_patterns.update(kwargs)
-        ret_val = self.execute_command("PSUBSCRIBE", *new_patterns.keys())
-        # update the patterns dict AFTER we send the command. we don't want to
-        # subscribe twice to these patterns, once for the command and again
-        # for the reconnection.
-        new_patterns = self._normalize_keys(new_patterns)
-        self.patterns.update(new_patterns)
-        if not self.subscribed:
-            # Set the subscribed_event flag to True
-            self.subscribed_event.set()
-            # Clear the health check counter
-            self.health_check_response_counter = 0
-        self.pending_unsubscribe_patterns.difference_update(new_patterns)
+        ret_val = None
+
+        for node in self.cluster.get_primaries():
+            print("primary node is: ", node)
+            redis_connection = self.cluster.get_redis_connection(node)
+            self.connection_pool = redis_connection.connection_pool
+            self.connection = self.connection_pool.get_connection(
+                "pubsub", self.shard_hint
+            )
+            self.connections.add(self.connection)
+
+            ret_val = self.execute_command("PSUBSCRIBE", *new_patterns.keys())
+            # update the patterns dict AFTER we send the command. we don't want to
+            # subscribe twice to these patterns, once for the command and again
+            # for the reconnection.
+            new_patterns = self._normalize_keys(new_patterns)
+            self.patterns.update(new_patterns)
+
+            if not self.subscribed:
+                # Set the subscribed_event flag to True
+                self.subscribed_event.set()
+                # Clear the health check counter
+                self.health_check_response_counter = 0
+            self.pending_unsubscribe_patterns.difference_update(new_patterns)
         return ret_val
 
     def punsubscribe(self, *args):
@@ -1071,9 +1091,10 @@ class PubSub:
                 # so no messages are available
                 return None
 
-        response = self.parse_response(block=(timeout is None), timeout=timeout)
-        if response:
-            return self.handle_message(response, ignore_subscribe_messages)
+        resps = self.parse_response(block=(timeout is None), timeout=timeout)
+        if resps:
+            for response in resps:
+                self.handle_message(response, ignore_subscribe_messages)
         return None
 
     get_sharded_message = get_message
