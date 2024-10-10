@@ -27,7 +27,7 @@ env:
   CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
   # this speeds up coverage with Python 3.12: https://github.com/nedbat/coveragepy/issues/1665
   COVERAGE_CORE: sysmon
-  REDIS_IMAGE: redis:7.4-rc2
+  REDIS_IMAGE: redis:latest
   REDIS_STACK_IMAGE: redis/redis-stack-server:latest
 
 jobs:
@@ -90,6 +90,21 @@ jobs:
           invoke ${{matrix.test-type}}-tests
           ls -1
 
+      - name: Run tests against hiredis < 3.0.0
+        if: ${{ matrix.connection-type == 'hiredis' && matrix.python-version == '3.12'}}
+        run: |
+          pip uninstall hiredis -y
+          pip install -U setuptools wheel
+          pip install -r requirements.txt
+          pip install -r dev_requirements.txt
+          if [ "${{matrix.connection-type}}" == "hiredis" ]; then
+           pip install "hiredis<3.0.0"
+          fi
+          invoke devenv
+          sleep 10 # time to settle
+          invoke ${{matrix.test-type}}-tests
+          ls -1
+
       - name: Upload test results and profiling data
         uses: actions/upload-artifact@v4
         with:
@@ -136,6 +151,24 @@ jobs:
           pip install -r dev_requirements.txt
           if [ "${{matrix.connection-type}}" == "hiredis" ]; then
             pip install hiredis
+          fi
+          invoke devenv
+          sleep 10 # time to settle
+          if [ "${{matrix.event-loop}}" == "uvloop" ]; then
+            invoke ${{matrix.test-type}}-tests --uvloop --protocol=3
+          else
+            invoke ${{matrix.test-type}}-tests --protocol=3
+          fi
+
+      - name: Run tests against hiredis < 3.0.0
+        if: ${{ matrix.connection-type == 'hiredis' && matrix.python-version == '3.12'}}
+        run: |
+          pip uninstall hiredis -y
+          pip install -U setuptools wheel
+          pip install -r requirements.txt
+          pip install -r dev_requirements.txt
+          if [ "${{matrix.connection-type}}" == "hiredis" ]; then
+            pip install "hiredis<3.0.0"
           fi
           invoke devenv
           sleep 10 # time to settle

@@ -190,7 +190,6 @@ def mock_node_resp(node: ClusterNode, response: Any) -> ClusterNode:
     connection = mock.AsyncMock(spec=Connection)
     connection.is_connected = True
     connection.read_response.return_value = response
-    connection._get_from_local_cache.return_value = None
     while node._free:
         node._free.pop()
     node._free.append(connection)
@@ -201,7 +200,6 @@ def mock_node_resp_exc(node: ClusterNode, exc: Exception) -> ClusterNode:
     connection = mock.AsyncMock(spec=Connection)
     connection.is_connected = True
     connection.read_response.side_effect = exc
-    connection._get_from_local_cache.return_value = None
     while node._free:
         node._free.pop()
     node._free.append(connection)
@@ -1754,38 +1752,38 @@ class TestClusterRedisCommands:
 
     async def test_cluster_sdiff(self, r: RedisCluster) -> None:
         await r.sadd("{foo}a", "1", "2", "3")
-        assert set(await r.sdiff("{foo}a", "{foo}b")) == {b"1", b"2", b"3"}
+        assert await r.sdiff("{foo}a", "{foo}b") == {b"1", b"2", b"3"}
         await r.sadd("{foo}b", "2", "3")
-        assert await r.sdiff("{foo}a", "{foo}b") == [b"1"]
+        assert await r.sdiff("{foo}a", "{foo}b") == {b"1"}
 
     async def test_cluster_sdiffstore(self, r: RedisCluster) -> None:
         await r.sadd("{foo}a", "1", "2", "3")
         assert await r.sdiffstore("{foo}c", "{foo}a", "{foo}b") == 3
-        assert set(await r.smembers("{foo}c")) == {b"1", b"2", b"3"}
+        assert await r.smembers("{foo}c") == {b"1", b"2", b"3"}
         await r.sadd("{foo}b", "2", "3")
         assert await r.sdiffstore("{foo}c", "{foo}a", "{foo}b") == 1
-        assert await r.smembers("{foo}c") == [b"1"]
+        assert await r.smembers("{foo}c") == {b"1"}
 
     async def test_cluster_sinter(self, r: RedisCluster) -> None:
         await r.sadd("{foo}a", "1", "2", "3")
-        assert await r.sinter("{foo}a", "{foo}b") == []
+        assert await r.sinter("{foo}a", "{foo}b") == set()
         await r.sadd("{foo}b", "2", "3")
-        assert set(await r.sinter("{foo}a", "{foo}b")) == {b"2", b"3"}
+        assert await r.sinter("{foo}a", "{foo}b") == {b"2", b"3"}
 
     async def test_cluster_sinterstore(self, r: RedisCluster) -> None:
         await r.sadd("{foo}a", "1", "2", "3")
         assert await r.sinterstore("{foo}c", "{foo}a", "{foo}b") == 0
-        assert await r.smembers("{foo}c") == []
+        assert await r.smembers("{foo}c") == set()
         await r.sadd("{foo}b", "2", "3")
         assert await r.sinterstore("{foo}c", "{foo}a", "{foo}b") == 2
-        assert set(await r.smembers("{foo}c")) == {b"2", b"3"}
+        assert await r.smembers("{foo}c") == {b"2", b"3"}
 
     async def test_cluster_smove(self, r: RedisCluster) -> None:
         await r.sadd("{foo}a", "a1", "a2")
         await r.sadd("{foo}b", "b1", "b2")
         assert await r.smove("{foo}a", "{foo}b", "a1")
-        assert await r.smembers("{foo}a") == [b"a2"]
-        assert set(await r.smembers("{foo}b")) == {b"b1", b"b2", b"a1"}
+        assert await r.smembers("{foo}a") == {b"a2"}
+        assert await r.smembers("{foo}b") == {b"b1", b"b2", b"a1"}
 
     async def test_cluster_sunion(self, r: RedisCluster) -> None:
         await r.sadd("{foo}a", "1", "2")
